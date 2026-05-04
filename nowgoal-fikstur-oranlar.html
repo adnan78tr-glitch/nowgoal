@@ -2,7 +2,7 @@
 <html lang="tr">
 <head>
     <meta charset="UTF-8">
-    <title>Nowgoal — Fikstür & Oranlar (Geçmiş 3 Gün)</title>
+    <title>Nowgoal — Fikstür & Oranlar</title>
     <style>
         * { box-sizing: border-box; }
         body { 
@@ -165,15 +165,16 @@
 <div class="container">
     <div class="header">
         <div>
-            <h2>Nowgoal - Geçmiş 3 Gün Fikstür & Oranlar</h2>
-            <span id="dateLabel"></span>
+            <h2>Nowgoal - Fikstür & Oranlar</h2>
+            <span id="dateLabel" style="font-size: 12px; color: #00d4ff;"></span>
         </div>
         <div>
+            <span id="matchCount" style="font-size: 12px; color: #00d4ff; margin-right: 10px;"></span>
             <button class="hbtn" id="btnRefresh" onclick="loadFixture()">Yenile</button>
         </div>
     </div>
 
-    <div style="display: flex; gap: 10px; margin-bottom: 10px;">
+    <div style="display: flex; gap: 10px; margin-bottom: 10px; flex-wrap: wrap;">
         <input id="searchBox" type="text" placeholder="Lig veya takım ara..." oninput="onSearch()">
         <button class="hbtn" onclick="toggleAll(true)">Tümünü Aç</button>
         <button class="hbtn" onclick="toggleAll(false)">Tümünü Kapat</button>
@@ -222,21 +223,17 @@ const PROXY = 'https://api.codetabs.com/v1/proxy?quest=';
 
 let allRows = [], leagueMap = {}, oddsData = {};
 
-function setStatus(msg) { 
-    console.log(msg);
-}
-
 async function fetchWithProxy(url) {
     try {
         const response = await Promise.race([
             fetch(PROXY + encodeURIComponent(url)),
-            new Promise((_, reject) => setTimeout(() => reject(new Error('Timeout')), 8000))
+            new Promise((_, reject) => setTimeout(() => reject(new Error('Timeout')), 10000))
         ]);
         if (response.ok) {
             return await response.text();
         }
     } catch (e) {
-        console.error(`Fetch hatası: ${e.message}`);
+        console.error(`❌ Fetch hatası: ${e.message}`);
     }
     return null;
 }
@@ -254,6 +251,7 @@ async function fetchJsonFromAPI(url) {
 }
 
 async function fetchLiveOdds() {
+    console.log('🔄 Canlı oranlar yükleniyor...');
     const oddsMap = {};
     const ts = Date.now();
     const liveUrl = `${BASE}/gf/data/odds/en/runOddsData_8.txt?${ts}`;
@@ -261,6 +259,8 @@ async function fetchLiveOdds() {
     
     if (liveData && liveData.length > 100) {
         const entries = liveData.split('$');
+        console.log(`✓ ${entries.length} oran entry bulundu`);
+        
         for (const entry of entries) {
             if (!entry.includes('!')) continue;
             const [id, ...rest] = entry.split('!');
@@ -277,6 +277,7 @@ async function fetchLiveOdds() {
             };
         }
     }
+    console.log(`✓ ${Object.keys(oddsMap).length} maç için oran yüklendi`);
     return oddsMap;
 }
 
@@ -305,52 +306,72 @@ async function fetchFixture() {
     const CST = 8 * 3600000;
 
     const dates = [];
-    const cur = new Date((fromMs + CST) / 1000 | 0);
-    const end = new Date((toMs + CST) / 1000 | 0);
-    cur.setHours(0, 0, 0, 0);
-    end.setHours(0, 0, 0, 0);
+    const cur = new Date((fromMs + CST));
+    const end = new Date((toMs + CST));
+    cur.setUTCHours(0, 0, 0, 0);
+    end.setUTCHours(0, 0, 0, 0);
     
     while (cur <= end) {
         dates.push(cur.toISOString().split('T')[0]);
-        cur.setDate(cur.getDate() + 1);
+        cur.setUTCDate(cur.getUTCDate() + 1);
     }
 
+    console.log(`📅 ${dates.length} gün kontrol ediliyor:`, dates);
+    
     const results = [], seenIds = new Set();
     
     for (const date of dates) {
+        console.log(`🔍 ${date} için fikstür çekiliyor...`);
         const json = await fetchJsonFromAPI(`${BASE}/Ajax/SoccerAjax/?type=6&date=${date}`);
-        if (!json?.Data) continue;
+        if (!json?.Data) {
+            console.log(`⚠️ ${date} için veri yok`);
+            continue;
+        }
         
         const data = json.Data;
+        console.log(`✓ ${date} veri geldi (${data.length} byte)`);
+        
+        // Ligleri parse et: B[1]=[...,'Liga Adı',...] 
         const leagues = {};
-        
-        const bRe = /B\[(\d+)\]=\[[^\]]*?'[^']*','([^']*)'/g;
+        const bRe = /B\[(\d+)\]=\[[^\]]*?'[^']*?','([^']*)'/g;
         let bm;
-        while ((bm = bRe.exec(data)) !== null) leagues[bm[1]] = bm[2];
+        while ((bm = bRe.exec(data)) !== null) {
+            leagues[bm[1]] = bm[2];
+        }
+        console.log(`  Ligler: ${Object.keys(leagues).length} adet`);
         
-        const aRe = /A\[(\d+)\]=\[(\d+),\s*(\d+),\s*(\d+),\s*(\d+),\s*'([^']*)'\s*,\s*'([^']*)'\s*,\s*'(\d{4}),(\d),(\d),(\d+),(\d+),(\d+)'\s*,\s*(-?\d+)[^,]*,(\d+),(\d+),(\d+),(\d+)/g;
+        // Maçları parse et
+        // Format: A[1]=[matchId, ligIdx, homeTeamId, awayTeamId, 'Home', 'Away', 'yyyy,m,d,h,mm,ss', state, ...]
+        const aRe = /A\[(\d+)\]=\[(\d+),\s*(\d+),\s*(\d+),\s*(\d+),\s*'([^']*)'\s*,\s*'([^']*)'\s*,\s*'(\d{4}),(\d+),(\d+),(\d+),(\d+),(\d+)'\s*,\s*(-?\d+)/g;
         let am;
+        let matchCount = 0;
         while ((am = aRe.exec(data)) !== null) {
-            const [,, id, lig, home, away, yr, mo, dy, hr, mn, st, ftH, ftA, htH, htA] = am;
-            const matchMs = Date.UTC(+yr, +mo - 1, +dy, +hr, +mn);
+            const [, , id, ligIdx, homeId, awayId, home, away, yr, mo, dy, hr, mn, sec, state] = am;
+            
             if (seenIds.has(+id)) continue;
             seenIds.add(+id);
+            matchCount++;
+            
+            const matchMs = Date.UTC(+yr, +mo - 1, +dy, +hr, +mn, +sec);
+            if (matchMs < fromMs || matchMs > toMs) continue;
             
             const d = new Date(matchMs);
             results.push({
                 id: +id,
                 date: d.toLocaleDateString('tr-TR'),
                 time: d.toTimeString().slice(0, 5),
-                league: leagues[lig] || `Lig#${lig}`,
+                league: leagues[ligIdx] || `Lig#${ligIdx}`,
                 home: home.trim(),
                 away: away.trim(),
-                ht: st === '-1' || st > 0 ? `${htH}-${htA}` : '-',
-                ft: st === '-1' || st > 0 ? `${ftH}-${ftA}` : '-',
-                state: +st
+                ht: state === '-1' || +state > 0 ? '-' : '-',
+                ft: state === '-1' || +state > 0 ? '-' : '-',
+                state: +state
             });
         }
+        console.log(`  ${matchCount} maç parse edildi`);
     }
     
+    console.log(`✅ Toplam ${results.length} maç bulundu`);
     results.sort((a, b) => a.id - b.id);
     return results;
 }
@@ -361,15 +382,23 @@ async function buildTable(matches) {
     allRows = [];
     leagueMap = {};
     
-    setStatus('Oranlar yükleniyor...');
+    console.log('📊 Tablo oluşturuluyor...');
     oddsData = await fetchLiveOdds();
     
     const filtered = matches.filter(m => !/\bwomen\b/i.test(m.league));
+    console.log(`📈 Gösterilecek: ${filtered.length} maç (kadın ligleri hariç)`);
     
     let lastLeague = null;
+    let leagueMatchCount = 0;
+    
     for (const m of filtered) {
         if (m.league !== lastLeague) {
+            if (lastLeague) {
+                console.log(`  ${lastLeague}: ${leagueMatchCount} maç`);
+            }
             lastLeague = m.league;
+            leagueMatchCount = 0;
+            
             const tr = document.createElement('tr');
             tr.className = 'league-row';
             tr.innerHTML = `<td colspan="27"><span style="margin-right:8px">▼</span>${m.league}</td>`;
@@ -378,6 +407,7 @@ async function buildTable(matches) {
             leagueMap[m.league] = { el: tr, matches: [], open: true };
             allRows.push({ el: tr, league: m.league.toLowerCase(), type: 'l' });
         }
+        leagueMatchCount++;
         
         const tr = document.createElement('tr');
         tr.className = 'match-row';
@@ -387,6 +417,7 @@ async function buildTable(matches) {
         const odds = oddsData[m.id];
         const status = m.state === -1 ? '<span class="badge b-done">Bitti</span>' :
                       m.state === 0 ? '<span class="badge b-sched">Planlandı</span>' :
+                      m.state === 100 ? '<span class="badge b-sched">Devre</span>' :
                       '<span class="badge b-live">Canlı</span>';
         
         tr.innerHTML = `
@@ -411,6 +442,11 @@ async function buildTable(matches) {
         leagueMap[m.league].matches.push(tr);
         allRows.push({ el: tr, search: tr.dataset.search, type: 'm' });
     }
+    
+    if (lastLeague) {
+        console.log(`  ${lastLeague}: ${leagueMatchCount} maç`);
+    }
+    console.log(`✅ Tablo hazır! ${allRows.length} satır`);
 }
 
 function toggleLeague(name) {
@@ -438,28 +474,34 @@ function onSearch() {
 }
 
 async function loadFixture() {
+    console.clear();
+    console.log('🚀 Fikstür yükleme başlıyor...\n');
+    
     const now = Date.now();
     const fmt = ms => new Date(ms + 3 * 3600000).toISOString().slice(0, 16).replace('T', ' ');
     
     document.getElementById('dateLabel').textContent = `${fmt(now - 72*3600000)} → ${fmt(now + 48*3600000)}`;
     document.getElementById('btnRefresh').disabled = true;
+    document.getElementById('matchCount').textContent = 'Yükleniyor...';
     
     const bar = document.getElementById('loadingBar');
     bar.style.display = 'block';
-    document.getElementById('loadingFill').style.width = '50%';
+    document.getElementById('loadingFill').style.width = '30%';
     
-    setStatus('Fikstür yükleniyor...');
     const matches = await fetchFixture();
-    await buildTable(matches);
+    document.getElementById('loadingFill').style.width = '70%';
     
+    await buildTable(matches);
     document.getElementById('loadingFill').style.width = '100%';
+    
     setTimeout(() => {
         bar.style.display = 'none';
         document.getElementById('loadingFill').style.width = '0';
     }, 300);
     
+    document.getElementById('matchCount').textContent = `${matches.length} maç`;
     document.getElementById('btnRefresh').disabled = false;
-    setStatus('Hazır!');
+    console.log('\n✅ Tüm işlem tamamlandı!');
 }
 
 document.addEventListener('DOMContentLoaded', loadFixture);
