@@ -159,6 +159,14 @@
             background: linear-gradient(90deg, #456da8, #00d4ff);
             transition: width .3s;
         }
+        .score-live {
+            color: #ff5252;
+            font-weight: bold;
+        }
+        .score-done {
+            color: #00d4ff;
+            font-weight: bold;
+        }
     </style>
 </head>
 <body>
@@ -331,7 +339,7 @@ async function fetchFixture() {
         const data = json.Data;
         console.log(`✓ ${date} veri geldi (${data.length} byte)`);
         
-        // Ligleri parse et: B[1]=[...,'Liga Adı',...] 
+        // Ligleri parse et
         const leagues = {};
         const bRe = /B\[(\d+)\]=\[[^\]]*?'[^']*?','([^']*)'/g;
         let bm;
@@ -341,21 +349,18 @@ async function fetchFixture() {
         console.log(`  Ligler: ${Object.keys(leagues).length} adet`);
         
         // Maçları parse et
-        // Format: A[1]=[matchId, ligIdx, homeTeamId, awayTeamId, 'Home', 'Away', 'yyyy,m,d,h,mm,ss', state, ...]
-        const aRe = /A\[(\d+)\]=\[(\d+),\s*(\d+),\s*(\d+),\s*(\d+),\s*'([^']*)'\s*,\s*'([^']*)'\s*,\s*'(\d{4}),(\d+),(\d+),(\d+),(\d+),(\d+)'\s*,\s*(-?\d+)/g;
+        // Format: A[idx]=[id, ligIdx, homeId, awayId, 'home', 'away', 'yyyy,m,d,h,mm,ss', state, ..., htH, htA, ftH, ftA, ...]
+        const aRe = /A\[(\d+)\]=\[(\d+),\s*(\d+),\s*(\d+),\s*(\d+),\s*'([^']*)'\s*,\s*'([^']*)'\s*,\s*'(\d{4}),(\d+),(\d+),(\d+),(\d+),(\d+)'\s*,\s*(-?\d+)[^,]*,(\d+),(\d+),(\d+),(\d+)/g;
         let am;
         let matchCount = 0;
         while ((am = aRe.exec(data)) !== null) {
-            const [, , id, ligIdx, homeId, awayId, home, away, yr, mo, dy, hr, mn, sec, state] = am;
+            const [, , id, ligIdx, homeId, awayId, home, away, yr, mo, dy, hr, mn, sec, state, htH, htA, ftH, ftA] = am;
             
             if (seenIds.has(+id)) continue;
             seenIds.add(+id);
             matchCount++;
             
-            const matchMs = Date.UTC(+yr, +mo - 1, +dy, +hr, +mn, +sec);
-            if (matchMs < fromMs || matchMs > toMs) continue;
-            
-            const d = new Date(matchMs);
+            const d = new Date(Date.UTC(+yr, +mo - 1, +dy, +hr, +mn, +sec));
             results.push({
                 id: +id,
                 date: d.toLocaleDateString('tr-TR'),
@@ -363,8 +368,8 @@ async function fetchFixture() {
                 league: leagues[ligIdx] || `Lig#${ligIdx}`,
                 home: home.trim(),
                 away: away.trim(),
-                ht: state === '-1' || +state > 0 ? '-' : '-',
-                ft: state === '-1' || +state > 0 ? '-' : '-',
+                ht: (state === '-1' || +state > 0) ? `${htH}-${htA}` : '-',
+                ft: (state === '-1' || +state > 0) ? `${ftH}-${ftA}` : '-',
                 state: +state
             });
         }
@@ -420,6 +425,9 @@ async function buildTable(matches) {
                       m.state === 100 ? '<span class="badge b-sched">Devre</span>' :
                       '<span class="badge b-live">Canlı</span>';
         
+        const htClass = m.state > 0 ? 'score-live' : m.state === -1 ? 'score-done' : '';
+        const ftClass = m.state === -1 ? 'score-done' : '';
+        
         tr.innerHTML = `
             <td class="c">${m.id}</td>
             <td class="c">${m.date}</td>
@@ -427,8 +435,8 @@ async function buildTable(matches) {
             <td>${m.league}</td>
             <td><b>${m.home}</b></td>
             <td>${m.away}</td>
-            <td class="c">${m.ht}</td>
-            <td class="c">${m.ft}</td>
+            <td class="c ${htClass}">${m.ht}</td>
+            <td class="c ${ftClass}">${m.ft}</td>
             <td class="c">${status}</td>
             ${renderOdds(odds, 'ht_euro')}
             ${renderOdds(odds, 'ht_ah')}
